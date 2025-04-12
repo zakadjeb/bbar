@@ -30,18 +30,27 @@
 %   xticks                  - Set the ticks on xline (default: based on data length)
 %   xtickslabels            - Set the labels, eg. {'', 'Pre', 'Post'}
 %   xlim                    - Set the extremes of the x axis.
-%   stats                   - Compute the statistics, either 'wilcoxon','ttest' of 'chi2' (default: [])
+%   plotLsline              - Plots the least-square line to show a mean
+%                             (default: 0)
+%   stats                   - Compute the statistics, either 'wilcoxon',
+%                             'steeldwass', 'ttest' of 'chi2' (default: [])
 %                             if chi2 is used, make sure to supply two
 %                             lines data input, e.g. 2 x 1 cell array:
 %                             input = [{8},{5};{4},{7}]. Assuming here that the
-%                             first line are the Incorrect responses.
+%                             first row are the Incorrect responses.
 %   comparison              - Comparison matrix, eg. [1 2; 2 3; 1 3] which compares
 %                             condition 1 with 2, and 2 with 3, and 1 with 3 (default: [])
 %   multcmp                 - If there's more than one comparison, it will
 %                             automatically correct for multiple
-%                             comparison. Determine the method here:
+%                             comparison. Determine the method:
 %                             'holm', 'hochberg', 'hommel', 
 %                             'bonferroni', 'BH', 'BY', 'fdr'(default), 'sidak' or 'none'.
+%                             Number of comparisons can be custom if used
+%                             like a cell: {'BY',3}: Use 'BY', correct for
+%                             3 comparisons.
+%   rmOutlier               - Remove outliers. Set the z-score difference.
+%                             (default: 0). If non-zero, outliers are
+%                             typically set to 3.
 %   paired                  - Determine if 'paired' (default: 0)
 %   printP                  - Determine if exact p-values should be printed
 %                             with significance stars (default: 0)
@@ -105,9 +114,10 @@ addOptional(p, 'xtickslabels', defaultXTicksLabels, @iscell);
 addOptional(p, 'writeXTicks', 1, @isnumeric);
 addOptional(p, 'xlim', [.5 length(data)+.75], @isnumeric);
 addOptional(p, 'ylim', [], @isnumeric);
+addOptional(p, 'plotLsline', 0, @isnumeric);
 addOptional(p, 'stats', '', @ischar);
 addOptional(p, 'comparison', [], @isnumeric);
-addOptional(p, 'multcmp','fdr', @ischar);
+addOptional(p, 'multcmp','fdr', @(x) ischar(x) || iscell(x));
 addOptional(p, 'paired', 0, @isnumeric);
 addOptional(p, 'ylabel', 'magnitude', @ischar);
 addOptional(p, 'xlabel', '', @ischar);
@@ -149,7 +159,7 @@ if p.Results.rmOutlier
     for i = 1:length(data)
         data{i} = rmoutliers(data{i},"quartiles");
     end
-end
+end 
 
 % If not equally long, fill in with NaN's
 tmpList = [];
@@ -188,6 +198,21 @@ jitter = remapnumbers(rand(1,length(cell2mat(data{i}))), -p.Results.jitterAmount
 % Making sure that if 'stats' has been declared, the comparison should too.
 if ~isempty(p.Results.stats) && isempty(p.Results.comparison); error('Please provide a comparison if you wish to compute the stats. E.g. [1 2; 2 3]'); end
 if isempty(p.Results.stats) && ~isempty(p.Results.comparison); error('Please provide a statistical test if you wish to compute the stats. E.g. wilcoxon.'); end
+
+% Making sure the multcmp is output correctly
+if iscell(p.Results.multcmp)
+    for i = 1:length(p.Results.multcmp)
+        if ~ischar(p.Results.multcmp{1}) || ~isnumeric(p.Results.multcmp{2})
+            error('Error in multcmp: first provide the method, and then the number of DF.');
+        end
+        
+        DFnum = p.Results.multcmp{2};
+        multcmp = p.Results.multcmp{1};
+
+    end
+else
+    multcmp = p.Results.multcmp;
+end
 
 % Box Plot
 if p.Results.BoxPlot 
@@ -237,6 +262,22 @@ if p.Results.Scatter
                 p.Results.ScatterSize,p.Results.cmap(i,:),'filled','MarkerFaceAlpha',p.Results.alpha);
         end
         hold on;
+    end
+end
+
+% linear fit (it's working fine, but needs to be reworked so that one can
+% choose between fitting within one condition, or across all conditions
+if p.Results.plotLsline
+    try 
+        h = lsline;
+    catch
+        error('Using the linear regression requires setting ''scatter'' to 1');
+    end
+    for i1 = 1:length(h)
+        % h(i1).Color = mycmap(i1,:);
+        h(i1).Color = 'k';
+        h(i1).LineStyle = ':';
+        h(i1).LineWidth = 1;
     end
 end
 
@@ -411,16 +452,47 @@ if strcmp(p.Results.stats, 'chi2')
     ["Stats test","Comparison","Chi/Odds ratio","Means","P-value","Cohens d"]);
 end
 
+% Steel-Dwass 
+% ------------------
+% Wilcoxon compares medians, this one compares means.
+if strcmp(p.Results.stats,'steel') || strcmp(p.Results.stats,'dwass') || strcmp(p.Results.stats,'steeldwass')
+    disp('Working on this one still. Functions are done but implementation is missing.')
+
+    
+        % if p.Results.paired == 0
+        %     preparedObservations = [];
+        %     preparedGroups = [];
+        %     for i = 1:size(p.Results.xtickslabels,2)
+        %         preparedGroups = [preparedGroups; repmat(string(p.Results.xtickslabels{i}),length(cell2mat(data{i})),1)];
+        %         preparedObservations = [preparedObservations; cell2mat(data{i})];
+        %     end
+        %     assert(length(preparedGroups) == length(preparedObservations));
+        %     [pVal, stats] = steel_dwass_unpaired(preparedObservations, preparedGroups);
+        %     tmpStats{i,1} = ["Steel-Wass Unpaired test"];
+        % elseif p.Results.paired == 1
+        %     preparedObservations = [];
+        %     preparedGroups = [];
+        %     for i = 1:size(p.Results.xtickslabels,2)
+        %         preparedGroups = [preparedGroups; repmat(string(p.Results.xtickslabels{i}),length(cell2mat(data{i})),1)];
+        %         preparedObservations = [preparedObservations; cell2mat(data{i})];
+        %     end
+        %     assert(length(preparedGroups) == length(preparedObservations));
+        %     [pVal, stats] = steel_dwass_paired(preparedObservations, preparedGroups);
+        %     tmpStats{i,1} = ["Steel-Wass Unpaired test"];
+        % end
+    
+end
+
 % Wilcoxon
 % ------------------
 if strcmp(p.Results.stats, 'wilcoxon')
     for i = 1:size(p.Results.comparison,1)
         % Wilcoxon
         if p.Results.paired == 0
-            [pVal,h,stats] = ranksum(cell2mat(data{p.Results.comparison(i,1)}), cell2mat(data{p.Results.comparison(i,2)}));
+            [pVal,h,stats] = ranksum(cell2mat(data{p.Results.comparison(i,1)}), cell2mat(data{p.Results.comparison(i,2)}),'method','approximate','tail','both');
             tmpStats{i,1} = ["Wilcoxon Unpaired test"];
         else
-            [pVal,h,stats] = signrank(cell2mat(data{p.Results.comparison(i,1)}), cell2mat(data{p.Results.comparison(i,2)}));
+            [pVal,h,stats] = signrank(cell2mat(data{p.Results.comparison(i,1)}), cell2mat(data{p.Results.comparison(i,2)}),'method','approximate','tail','both');
             tmpStats{i,1} = ["Wilcoxon Paired test"];
         end
         pVal = round(pVal,4,'decimal');
@@ -500,12 +572,16 @@ end
 % Correcting for multiple comparison if comparions are more than one.
 % -------------------
 if ~isempty(p.Results.stats)
-    if strcmp(p.Results.multcmp,'none')
+    if strcmp(multcmp,'none')
         adj_p = tmpStats.("P-value");
     else
-        adj_p = pval_adjust(tmpStats.("P-value"),p.Results.multcmp);
+        if exist('DFnum','var')
+            adj_p = pval_adjust(tmpStats.("P-value"),multcmp, DFnum);
+        else
+            adj_p = pval_adjust(tmpStats.("P-value"),multcmp);
+        end
         if size(p.Results.comparison,1) > 1
-            warning(['p-values are corrected for multiple comparison using ' p.Results.multcmp '.']);
+            warning(['p-values are corrected for multiple comparison using ' multcmp '.']);
         end
     end
     tmpStats.("P-value") = adj_p;
@@ -534,7 +610,7 @@ if ~isempty(p.Results.stats)
         end
         plot([p.Results.comparison(i,1) p.Results.comparison(i,2)], repmat(distanceSignficancePlot(i),1,2),'k');
         text((p.Results.comparison(i,1)+p.Results.comparison(i,2))/2, (distanceSignficancePlot(i)),printedPval,...
-            'HorizontalAlignment','Center','VerticalAlignment','top','FontName','Calibri');
+            'HorizontalAlignment','Center','VerticalAlignment','top','FontName','Calibri','FontSize',8);
     end
 end
 
@@ -658,4 +734,107 @@ function [d, ci_lower, ci_upper] = computeCohensD(x1, x2, alpha)
     % Compute confidence intervals
     ci_lower = d - norminv(1-alpha/2) * sed;
     ci_upper = d + norminv(1-alpha/2) * sed;
+end
+
+function [p_values, stats] = steel_dwass_unpaired(data, groups)
+% STEEL_DWASS_UNPAIRED Performs Steel-Dwass test for unpaired data
+% Returns uncorrected p-values and test statistics
+% 
+% Inputs:
+%   data: Column vector of observations
+%   groups: Column vector of group labels (same length as data)
+%
+% Outputs:
+%   p_values: Vector of uncorrected p-values for each comparison
+%   stats: Vector of test statistics for each comparison
+%   comparison_labels: Cell array describing each comparison
+
+unique_groups = unique(groups);
+n_groups = length(unique_groups);
+n_comparisons = nchoosek(n_groups, 2);
+p_values = zeros(n_comparisons, 1);
+stats = zeros(n_comparisons, 1);
+comparison_labels = cell(n_comparisons, 1);
+
+comparison = 1;
+for i = 1:n_groups
+   for j = (i+1):n_groups
+       % Get data for groups i and j
+       group1 = data(groups == unique_groups(i));
+       group2 = data(groups == unique_groups(j));
+       
+       n1 = length(group1);
+       n2 = length(group2);
+       
+       % Combine and rank
+       combined = [group1; group2];
+       [~, ranks] = sort(combined);
+       rank_values = zeros(size(combined));
+       rank_values(ranks) = 1:length(combined);
+       
+       % Calculate rank sum and test statistic
+       R1 = sum(rank_values(1:n1));
+       S = (R1 - n1*(n1+n2+1)/2) / sqrt(n1*n2*(n1+n2+1)/12);
+       
+       % Store test statistic and p-value
+       stats(comparison) = S;
+       p_values(comparison) = 2 * (1 - normcdf(abs(S)));
+       comparison_labels{comparison} = [unique_groups(i) + " vs " + unique_groups(j)];
+       
+       comparison = comparison + 1;
+   end
+end
+end
+
+function [p_values, stats] = steel_dwass_paired(data, groups)
+% STEEL_DWASS_PAIRED Performs Steel-Dwass test for paired data
+% Returns uncorrected p-values and test statistics
+% 
+% Inputs:
+%   data: Matrix where each column is a condition and each row is a subject
+%   groups: Vector of group labels (length = number of columns in data)
+%
+% Outputs:
+%   p_values: Vector of uncorrected p-values for each comparison
+%   stats: Vector of test statistics for each comparison
+%   comparison_labels: Cell array describing each comparison
+
+
+unique_groups = unique(groups);
+n_groups = length(unique_groups);
+n_comparisons = nchoosek(n_groups, 2);
+p_values = zeros(n_comparisons, 1);
+stats = zeros(n_comparisons, 1);
+comparison_labels = cell(n_comparisons, 1);
+
+comparison = 1;
+for i = 1:n_groups
+   for j = (i+1):n_groups
+       % Get paired differences
+       diff = data(:,i) - data(:,j);
+       
+       % Remove zeros and get signs
+       nonzero_diff = diff(diff ~= 0);
+       signs = sign(nonzero_diff);
+       
+       % Rank absolute differences
+       [~, ranks] = sort(abs(nonzero_diff));
+       rank_values = zeros(size(nonzero_diff));
+       rank_values(ranks) = 1:length(nonzero_diff);
+       
+       % Calculate signed rank sum
+       W = sum(signs .* rank_values);
+       
+       % Calculate test statistic
+       n = length(nonzero_diff);
+       S = W / sqrt(n*(n+1)*(2*n+1)/6);
+       
+       % Store test statistic and p-value
+       stats(comparison) = S;
+       p_values(comparison) = 2 * (1 - normcdf(abs(S)));
+       comparison_labels{comparison} = [unique_groups(i) + " vs " + unique_groups(j)];
+       
+       comparison = comparison + 1;
+   end
+end
 end
