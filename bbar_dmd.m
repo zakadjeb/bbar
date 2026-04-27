@@ -1,6 +1,6 @@
 % Dynamic Mode Decomposition
 %
-% [phi, omega, lambda, b, Xdmd] = bbar_dmd(x1, x2, n)
+% [phi, omega, lambda, b, Xdmd, timeDyn, a, E] = bbar_dmd(x1, x2, n)
 %
 % DMD decomposes the data into spatial and temporal modes. These are
 % eigenvectors and eigenvalues, respectively. It's mainly based on the SVD
@@ -35,42 +35,52 @@
 % lambda    = Discrete time-series for modes
 % b         = Vector of magnitude of modes
 % Xdmd      = Reconstructed X , phi * b0^time
+% timeDyn   = mode activations over time
+% a         = data-driven mode weights over time (pinv(phi)*x1)
+% E         = model measure (approximation error using Frobenius norm)
 %
 % by Zakaria Djebbara, Feb. 2025
+% 
+% Updates:
+% 04-01-26: Added a model measure for selecting number of modes.
 %
 
-function [phi, omega, lambda, b, Xdmd, timeDyn] = bbar_dmd(x1, x2, n, dt)
+function [phi, omega, lambda, b, Xdmd, timeDyn, a, E] = bbar_dmd(x1, x2, n, dt)
 
-if nargin == 3; dt = 1; end
+if nargin < 4; dt = 1; end
 
 % Computing the SVD
 [U, S, V] = svd(x1,"econ"); % Computing U, S, V
 
 % Computing the variables
-U = U(:,1:n);               % Reducing the number of U-modes
-V = V(:,1:n);               % Reducing the number of V-value
-S = S(1:n,1:n);             % Reducing the number of scaling-values
-S_inverse = inv(S);         % Computing the inverse Sigma
+U = U(:,1:n);                 % Reducing the number of U-modes
+V = V(:,1:n);                 % Reducing the number of V-value
+S = S(1:n,1:n);               % Reducing the number of scaling-values
+S_inverse = diag(1./diag(S)); % Computing the inverse Sigma
 
 % Computing the A_tilde (an approximation of A)
 A_tilde = conj(U') * x2 * V * S_inverse; % Computing the Ã. 
-[W,D] = eig(A_tilde);       % Computing the eigenmatrix and eigenvalues.
+[W,D] = eig(A_tilde);         % Computing the eigenmatrix and eigenvalues.
 
 % Computing the DMD modes
 phi = x2 * V * S_inverse * W; % Computing the DMD
-lambda = diag(D);           % The discrete eigenvalues (activation)
-omega = log(lambda)/dt;     % The continuous eigenvalues
+lambda = diag(D);             % The discrete eigenvalues (activation)
+omega = log(lambda)/dt;       % The continuous eigenvalues
 
 % Computing the magnitude of each mode
-b = phi \ x1(:,1);
+b = pinv(phi) * x1(:,1);
 
 % DMD reconstruction
-m = size(x1, 2);
-timeDyn = zeros(n, m);
+m = size(x1,2);
 t = (0:m-1)*dt;
-
-for i = 1:m
-    timeDyn(:,i) = b.*exp(omega*t(i));
-end
+timeDyn = b .* exp(omega * t);
 Xdmd = phi * timeDyn;
+
+% Data-driven mode weights over time (projection coefficients)
+a = pinv(phi) * x1;
+
+% Computing a model-measure for selecting no. of modes.
+num = norm(x1 - Xdmd, 'fro')^2;
+den = norm(x1, 'fro')^2;
+E  = 1 - (num / den);
 end

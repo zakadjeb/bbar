@@ -17,7 +17,7 @@
 %   BoxWidth                - Width of boxes in box plot (default: .25)
 %   Scatter                 - Adds a scatter plot (default: 1)
 %   Normal                  - Adds a ksdensity plot (default: 1)
-%   BarPlot                - Adds a barplot (default: 0)
+%   BarPlot                 - Adds a barplot (default: 0)
 %   Alpha                   - Alpha level of plots (default: .5)
 %   jitterAmount            - Determines jitter level of scatterplot (default: .1)
 %   cmap                    - Determines the colormap of the plots (default: bbar_makecmap())
@@ -48,6 +48,9 @@
 %                             Number of comparisons can be custom if used
 %                             like a cell: {'BY',3}: Use 'BY', correct for
 %                             3 comparisons.
+%   DFnum                   - Insert custom number of Degrees of Freedom
+%                             for the multcmp above (default: number of
+%                             groups)
 %   rmOutlier               - Remove outliers. Set the z-score difference.
 %                             (default: 0). If non-zero, outliers are
 %                             typically set to 3.
@@ -118,6 +121,7 @@ addOptional(p, 'plotLsline', 0, @isnumeric);
 addOptional(p, 'stats', '', @ischar);
 addOptional(p, 'comparison', [], @isnumeric);
 addOptional(p, 'multcmp','fdr', @(x) ischar(x) || iscell(x));
+addOptional(p, 'DFnum',[],@isnumeric);
 addOptional(p, 'paired', 0, @isnumeric);
 addOptional(p, 'ylabel', 'magnitude', @ischar);
 addOptional(p, 'xlabel', '', @ischar);
@@ -137,9 +141,11 @@ cmap = p.Results.cmap;
 % Making sure the 'nexttile' is an option
 if strcmp(p.Results.nexttile, 'on')
     nexttile;
-elseif p.Results.nexttile ~= 0
+elseif isgraphics(p.Results.nexttile, 'axes')   % <-- axes handle passed in
+    axes(p.Results.nexttile);                    %#ok<LAXES>
+elseif isnumeric(p.Results.nexttile) && p.Results.nexttile ~= 0
     nexttile(p.Results.nexttile);
-elseif p.Results.nexttile == 0
+elseif isnumeric(p.Results.nexttile) && p.Results.nexttile == 0
     figure('Position',p.Results.fPosition)
 end
 
@@ -193,7 +199,7 @@ else
 end
 
 % Generating the jitter-pattern
-jitter = remapnumbers(rand(1,length(cell2mat(data{i}))), -p.Results.jitterAmount, p.Results.jitterAmount);
+jitter = bbar_remapnumbers(rand(1,length(cell2mat(data{i}))), -p.Results.jitterAmount, p.Results.jitterAmount);
 
 % Making sure that if 'stats' has been declared, the comparison should too.
 if ~isempty(p.Results.stats) && isempty(p.Results.comparison); error('Please provide a comparison if you wish to compute the stats. E.g. [1 2; 2 3]'); end
@@ -299,7 +305,7 @@ end
 if p.Results.Normal
     for i = 1:length(data)
         [f, xi] = ksdensity(cell2mat(data{i}),'Bandwidth', p.Results.Bandwidth);
-        pfig = patch(remapnumbers(f, 0, .5) + i, xi, p.Results.cmap(i,:), 'FaceAlpha',p.Results.alpha);
+        pfig = patch(bbar_remapnumbers(f, 0, .5) + i, xi, p.Results.cmap(i,:), 'FaceAlpha',p.Results.alpha);
     end
 end
 
@@ -655,6 +661,9 @@ function adj_C = test_similarity(C)
     end
     adj_C = C;
 end
+
+
+
 
 function [pVal, type, chi2stat, df] = computeChi2(X,alpha)
     % H0 : the variables are independent, there is no relationship between the two categorical variables. 
