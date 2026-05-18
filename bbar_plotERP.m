@@ -10,13 +10,19 @@ addOptional(p, 'newfig', 1, @isnumeric);
 addOptional(p, 'ylim',[], @isnumeric);
 addOptional(p, 'xlabel', 'time (ms)', @ischar);
 addOptional(p, 'ylabel', 'μV', @ischar);
-addOptional(p, 'markedarea', NaN, @isnumeric);
 addOptional(p, 'baseline', NaN, @isnumeric);
 addOptional(p, 'myColormap', bbar_makecmap([51/255, 92/255, 103/255; 224/255, 159/255, 62/255; 84/255, 11/255, 14/255], size(data,2)));
 addOptional(p, 'raincloud', [], @(x) isnumeric(x) && (isempty(x) || numel(x)==2));
+addOptional(p, 'erpDetection', 'mean', @(x) ischar(x) || isstring(x));
 addOptional(p, 'raincloudArgs', {}, @iscell);
 addOptional(p, 'legend', 1, @isnumeric);
 parse(p, data, varargin{:});
+
+erpDetection = lower(char(p.Results.erpDetection));
+validErpDetection = {'mean','positive','negative'};
+if ~ismember(erpDetection, validErpDetection)
+    error('erpDetection must be ''mean'', ''positive'', or ''negative''.');
+end
 
 % -------------------- Extract time vector ONCE --------------------
 % This is the authoritative time axis used for all indexing and plotting
@@ -39,8 +45,7 @@ end
 
 % -------------------- Main code --------------------
 numberOfDatasets = size(data,2);
-uniqueSbs = unique(string({data{1}.subject}'));
-erpData = cell(size(data));   % each cell: nSubs x nTimepoints
+erpData = cell(size(data));   % each cell: nRows/nSubjects x nTimepoints
 
 FullStats = table();
 
@@ -54,19 +59,35 @@ for i1 = 1:numberOfDatasets
     end
 end
 
+% Each element/row in data{i1} is treated as one subject/observation.
+% This avoids relying on EEG.subject, which is often empty.
 for i1 = 1:numberOfDatasets
-    k = 1;
-    for i2 = uniqueSbs'
-        chanIdx = find(strcmp(string({data{i1}(1).chanlocs.labels}'), p.Results.chan));
-        idx = find(strcmp(string({data{1}.subject}), i2));
-        concatenatedData = cat(3, data{i1}(idx).data);          % chan x nTimepoints x nTrials
-        averagedData = mean(concatenatedData(chanIdx,:,:), 3);   % 1 x nTimepoints
+
+    nRows = numel(data{i1});
+    if nRows == 0
+        warning('bbar_plotERP: data{%d} is empty. Skipping this dataset.', i1);
+        erpData{i1} = [];
+        continue
+    end
+
+    chanIdx = find(strcmp(string({data{i1}(1).chanlocs.labels}'), p.Results.chan));
+    if isempty(chanIdx)
+        error('Channel %s was not found in data{%d}.', string(p.Results.chan), i1);
+    elseif numel(chanIdx) > 1
+        warning('bbar_plotERP: Multiple channels named %s found in data{%d}. Using the first match.', string(p.Results.chan), i1);
+        chanIdx = chanIdx(1);
+    end
+
+    for iRow = 1:nRows
+        thisData = data{i1}(iRow).data;                         % chan x nTimepoints x nTrials, or chan x nTimepoints
+        averagedData = mean(thisData(chanIdx,:,:), 3, 'omitnan');% 1 x nTimepoints
+
         if doBaseline
-            blMean = mean(averagedData(blIdx), 2);               % scalar, indexed by blIdx into nTimepoints
+            blMean = mean(averagedData(blIdx), 2, 'omitnan');    % scalar, indexed by blIdx into nTimepoints
             averagedData = averagedData - blMean;
         end
-        erpData{i1}(k,:) = averagedData;                        % nSubs x nTimepoints
-        k = k + 1;
+
+        erpData{i1}(iRow,:) = averagedData;                     % nRows/nSubjects x nTimepoints
     end
 end
 
@@ -104,15 +125,15 @@ if p.Results.plot
     for i1 = 1:size(erpData,2)
     
         % Marked area: find time indices from times vector, then use actual ms values
-        if ~isnan(p.Results.markedarea)
-            maIdx = find(times >= p.Results.markedarea(1) & times <= p.Results.markedarea(2));
+        if ~isnan(p.Results.raincloud)
+            maIdx = find(times >= p.Results.raincloud(1) & times <= p.Results.raincloud(2));
             if ~isempty(maIdx)
                 x = [times(maIdx(1))  times(maIdx(1))  times(maIdx(end))  times(maIdx(end))];
                 y = [myYlim(1) myYlim(2) myYlim(2) myYlim(1)];
                 fill(x, y, 'k', 'FaceAlpha', 0.05, 'EdgeColor', 'none');
             else
                 warning('bbar_plotERP: markedarea [%g %g] ms does not overlap with times [%g %g] ms. Skipping shading.', ...
-                    p.Results.markedarea(1), p.Results.markedarea(2), times(1), times(end));
+                    p.Results.raincloud(1), p.Results.raincloud(2), times(1), times(end));
             end
         end
     
@@ -154,7 +175,7 @@ if p.Results.plot
         lgd.Box = 'off';
     end
 
-    f.Color = [1 1 1];
+    set(gcf, 'Color', [1 1 1]);
 
     % ----- Raincloud axes -----
     if doRaincloud
@@ -165,10 +186,39 @@ if p.Results.plot
             warning('bbar_plotERP: raincloud window [%g %g] ms does not overlap with times [%g %g] ms. Skipping raincloud.', ...
                 rcWin(1), rcWin(2), times(1), times(end));
         else
-            % erpData{i1} is nSubs x nTimepoints → mean over rcIdx cols → nSubs x 1
+            % erpData{i1} is nSubs x nTimepoints. Extract one value per
+            % subject from the raincloud window using erpDetection:
+            %   'mean'     = mean amplitude across the window
+            %   'positive' = largest positive local peak in the window
+            %   'negative' = largest negative local peak in the window
             rcData = cell(1, numberOfDatasets);
             for i1 = 1:numberOfDatasets
-                rcData{i1} = mean(erpData{i1}(:, rcIdx), 2);   % mean over time → nSubs x 1
+                rcData{i1} = nan(size(erpData{i1}, 1), 1);      % nSubs x 1
+                for iSub = 1:size(erpData{i1}, 1)
+                    thisWindow = erpData{i1}(iSub, rcIdx);
+                    thisWindow = thisWindow(:)';                % force row vector
+
+                    switch erpDetection
+                        case 'mean'
+                            rcData{i1}(iSub) = mean(thisWindow, 'omitnan');
+
+                        case 'positive'
+                            [~, amp] = bbar_findpeaks(thisWindow, 'diff', 'positive');
+                            if isempty(amp) || all(isnan(amp))
+                                rcData{i1}(iSub) = max(thisWindow, [], 'omitnan');
+                            else
+                                rcData{i1}(iSub) = max(amp, [], 'omitnan');
+                            end
+
+                        case 'negative'
+                            [~, amp] = bbar_findpeaks(thisWindow, 'diff', 'negative');
+                            if isempty(amp) || all(isnan(amp))
+                                rcData{i1}(iSub) = min(thisWindow, [], 'omitnan');
+                            else
+                                rcData{i1}(iSub) = min(amp, [], 'omitnan');
+                            end
+                    end
+                end
             end
 
             ax_rc = nexttile(3);
@@ -177,7 +227,7 @@ if p.Results.plot
                 'nexttile',     ax_rc, ...
                 'cmap',         p.Results.myColormap, ...
                 'ylabel',       'μV', ...
-                'xlabel',       sprintf('%g – %g ms', rcWin(1), rcWin(2)), ...
+                'xlabel',       sprintf('%s: %g – %g ms', erpDetection, rcWin(1), rcWin(2)), ...
                 'xtickslabels', [{''},  datasetNames, {''}], ...
                 p.Results.raincloudArgs{:});
         end
